@@ -1,16 +1,39 @@
 #include "symmetric.h"
+#include <wolfssl/wolfcrypt/aes.h>
 
-int rs_encrypt(byte* cipher,
-               byte* plain, word32 sz_plain,
-               byte* nonce, word32 sz_nonce,
-               byte* tag, word32 sz_tag,
-               byte* aad, word32 sz_aad) {
+struct Suite suite = {
+        .key_size = KEY_SIZE,
+        .nonce_size = NONCE_SIZE,
+        .tag_size = TAG_SIZE
+};
+
+int rs_encrypt(byte *cipher, byte *plain, word32 sz_plain,
+               byte *key, byte *nonce, byte *tag,
+               byte *aad, word32 sz_aad) {
+
     Aes aes;
+    wc_AesCcmSetKey(&aes, key, suite.key_size);
 
     int ret = wc_AesCcmEncrypt(&aes, cipher,
                                plain, sz_plain,
-                               nonce, sz_nonce,
-                               tag, sz_tag,
+                               nonce, suite.nonce_size,
+                               tag, suite.tag_size,
+                               aad, sz_aad);
+
+    return ret;
+}
+
+int rs_decrypt(byte *plain, byte *cipher, word32 sz_cipher,
+               byte *key, byte *nonce, byte *tag,
+               byte *aad, word32 sz_aad) {
+
+    Aes aes;
+    wc_AesCcmSetKey(&aes, key, suite.key_size);
+
+    int ret = wc_AesCcmDecrypt(&aes, plain,
+                               cipher, sz_cipher,
+                               nonce, suite.nonce_size,
+                               tag, suite.tag_size,
                                aad, sz_aad);
 
     return ret;
