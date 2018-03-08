@@ -4,76 +4,40 @@
 
 #include "cwt.h"
 #include "utils.h"
-#include <wolfssl/wolfcrypt/ecc.h>
-#include <wolfssl/wolfcrypt/dsa.h>
 
-struct rs_key {
-    char* x;
-    char* y;
-    char* d;
-    ecc_curve_id curve_id;
-};
-
-struct rs_key AS_KEY = {
-        .x = "5aeec31f9e64aad45aba2d365e71e84dee0da331badab9118a2531501fd9861d",
-        .y = "27c9977ca32d544e6342676ef00fa434b3aaed99f4823750517ca3390374753",
-        .d = NULL,
-        .curve_id = ECC_SECP256R1
-};
-
-size_t read_key(byte** out, char* key, size_t len) {
-    size_t out_length = len / 2;
-    byte* block = malloc(out_length);
-
-    for (unsigned int i = 0; i < out_length; i++) {
-        char buf[3] = {key[2*i], key[2*i+1], 0};
-        block[i] = (byte) strtol(buf, 0, 16);
-    }
-
-    *out = block;
-
-    return out_length;
-}
-
-
-void cwt_parse(cbor_item_t *cwt) {
-    cbor_describe(cwt, stdout);
+void cwt_parse(rs_cwt* cwt, cbor_item_t *encoded) {
+    cbor_describe(encoded, stdout);
 
     // Extract tag
-    cbor_item_t* ary = cbor_tag_item(cwt);
+    cbor_item_t* ary = cbor_tag_item(encoded);
 
     // Extract ary members
-    cbor_item_t* prot = cbor_array_get(ary, 0);
-    cbor_item_t* unprot = cbor_array_get(ary, 1);
-    cbor_item_t* payload = cbor_array_get(ary, 2);
-    cbor_item_t* sig = cbor_array_get(ary, 3);
-
-    // Verify
-    byte eaad[0];
-    cbor_item_t* c_eaad = cbor_build_bytestring(eaad, 0);
-
-    cwt_verify(sig, prot, payload, c_eaad);
+    cwt->protected   = cbor_array_get(ary, 0);
+    cwt->unprotected = cbor_array_get(ary, 1);
+    cwt->payload     = cbor_array_get(ary, 2);
+    cwt->signature   = cbor_array_get(ary, 3);
 }
 
-void cwt_verify(cbor_item_t* signature, cbor_item_t *protected, cbor_item_t *payload, cbor_item_t *external_aad) {
-    cbor_item_t* enc_structure = cbor_new_definite_array(4);
+int cwt_verify(rs_cwt* cwt, cbor_item_t *external_aad, rs_key* key) {
+    // Define enc_structure
+    cbor_item_t *enc_structure = cbor_new_definite_array(4);
 
-    cbor_item_t* context = cbor_build_string("Signature1");
+    cbor_item_t *context = cbor_build_string("Signature1");
     cbor_array_push(enc_structure, context);
-    cbor_array_push(enc_structure, protected);
+    cbor_array_push(enc_structure, cwt->protected);
     cbor_array_push(enc_structure, external_aad);
-    cbor_array_push(enc_structure, payload);
+    cbor_array_push(enc_structure, cwt->payload);
 
-    unsigned char * buffer;
+    // Create enc_structure
+    unsigned char *buffer;
     size_t buffer_size, length = cbor_serialize_alloc(enc_structure, &buffer, &buffer_size);
-
+    printf("Enc-Structure: ");
     phex(buffer, length);
-
     cbor_decref(&enc_structure);
 
     // Make Key
     ecc_key as_key;
-    wc_ecc_import_raw_ex(&as_key, AS_KEY.x, AS_KEY.y, AS_KEY.d, AS_KEY.curve_id);
+    wc_ecc_import_raw_ex(&as_key, key->x, key->y, key->d, key->curve_id);
 
     // Compute Digest
     Sha256 sha;
@@ -82,15 +46,19 @@ void cwt_verify(cbor_item_t* signature, cbor_item_t *protected, cbor_item_t *pay
     wc_Sha256Update(&sha, buffer, length);
     wc_Sha256Final(&sha, digest);
 
+    printf("Digest: ");
     phex(digest, sizeof(digest));
 
-    byte* sig_data = cbor_bytestring_handle(signature);
-    size_t sig_data_length = cbor_bytestring_length(signature);
+    byte *sig_data = cbor_bytestring_handle(cwt->signature);
+    size_t sig_data_length = cbor_bytestring_length(cwt->signature);
 
+    printf("Signature: ");
     phex(sig_data, sig_data_length);
 
     int ret, verified = 0;
     ret = wc_ecc_verify_hash(sig_data, sig_data_length, digest, sizeof(digest), &verified, &as_key);
 
     free(buffer);
+
+    return verified;
 }

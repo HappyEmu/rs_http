@@ -12,6 +12,13 @@
 
 static const char *s_http_port = "8000";
 
+static struct rs_key AS_KEY = {
+        .x = "5aeec31f9e64aad45aba2d365e71e84dee0da331badab9118a2531501fd9861d",
+        .y = "27c9977ca32d544e6342676ef00fa434b3aaed99f4823750517ca3390374753",
+        .d = NULL,
+        .curve_id = ECC_SECP256R1
+};
+
 static void ev_handler(struct mg_connection *c, int ev, void *p) {
     if (ev == MG_EV_HTTP_REQUEST) {
         struct http_message *hm = (struct http_message *) p;
@@ -28,12 +35,22 @@ static void authz_info_handler(struct mg_connection* nc, int ev, void* ev_data) 
     struct http_message *hm = (struct http_message *) ev_data;
     struct mg_str cwt = hm->body;
 
+    printf("Received CWT: ");
     phex(cwt.p, cwt.len);
 
     // Parse CWT
     struct cbor_load_result res;
     cbor_item_t* cbor_cwt = cbor_load((cbor_data) cwt.p, cwt.len, &res);
-    cwt_parse(cbor_cwt);
+
+    rs_cwt parsed_cwt;
+    cwt_parse(&parsed_cwt, cbor_cwt);
+
+    // Verify CWT
+    byte eaad[0];
+    cbor_item_t* c_eaad = cbor_build_bytestring(eaad, 0);
+
+    cwt_verify(&parsed_cwt, c_eaad, &AS_KEY);
+
     cbor_decref(&cbor_cwt);
 
     // Send response
