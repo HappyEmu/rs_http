@@ -62,3 +62,14 @@ int cwt_verify(rs_cwt* cwt, cbor_item_t *external_aad, rs_key* key) {
 
     return verified;
 }
+
+
+size_t cwt_get_payload(rs_cwt *cwt, cbor_item_t **out) {
+    struct cbor_load_result res;
+    size_t payload_length = cbor_bytestring_length(cwt->payload);
+
+    cbor_item_t* payload = cbor_load((cbor_data) cwt->payload->data, payload_length, &res);
+    *out = payload;
+
+    return payload_length;
+}

@@ -10,6 +10,8 @@
 #include "cwt.h"
 #include "utils.h"
 
+#define AUDIENCE "tempSensor0"
+
 static const char *s_http_port = "8000";
 
 static struct rs_key AS_KEY = {
@@ -18,6 +20,20 @@ static struct rs_key AS_KEY = {
         .d = NULL,
         .curve_id = ECC_SECP256R1
 };
+
+static size_t error_buffer(char* buf, size_t buf_len, char* text) {
+    cbor_item_t* error = cbor_new_definite_map(1);
+    struct cbor_pair entry = {
+            .key = cbor_build_string("error"),
+            .value = cbor_build_string(text)
+    };
+    cbor_map_add(error, entry);
+
+    size_t length = cbor_serialize(error, buf, buf_len);
+    cbor_decref(&error);
+
+    return length;
+}
 
 static void ev_handler(struct mg_connection *c, int ev, void *p) {
     if (ev == MG_EV_HTTP_REQUEST) {
@@ -49,9 +65,54 @@ static void authz_info_handler(struct mg_connection* nc, int ev, void* ev_data) 
     byte eaad[0];
     cbor_item_t* c_eaad = cbor_build_bytestring(eaad, 0);
 
-    cwt_verify(&parsed_cwt, c_eaad, &AS_KEY);
-
+    int verified = cwt_verify(&parsed_cwt, c_eaad, &AS_KEY);
     cbor_decref(&cbor_cwt);
+
+    if (verified != 1) {
+        // Not authorized!
+        cbor_item_t* error = cbor_new_definite_map(1);
+        struct cbor_pair entry = {
+                .key = cbor_build_string("error"),
+                .value = cbor_build_string("Signature could not be verified!")
+        };
+        cbor_map_add(error, entry);
+
+        byte buf[128];
+        size_t length = cbor_serialize(error, &buf, sizeof(buf));
+
+        mg_send_head(nc, 401, length, "Content-Type: application/octet-stream");
+        mg_printf(nc, "%.*s", (int)length, buf);
+
+        nc->flags |= MG_F_SEND_AND_CLOSE;
+        return;
+    }
+
+    // Check audience
+    cbor_item_t* payload;
+    cwt_get_payload(&parsed_cwt, &payload);
+
+    struct cbor_pair* entries = cbor_map_handle(payload);
+    for (int i = 0; i < cbor_map_size(payload); i++) {
+        uint8_t label = cbor_get_uint8(entries[i].key);
+
+        if (label == 3) {
+            char audience[cbor_string_length(entries[i].value) + 1];
+            strcpy(audience, cbor_string_handle(entries[i].value));
+
+            if (strcmp(audience, AUDIENCE) != 0) {
+                char buf[128];
+                size_t len = error_buffer(buf, sizeof(buf), "Audience mismatch!");
+
+                mg_send_head(nc, 403, len, "Content-Type: application/octet-stream");
+                mg_printf(nc, "%.*s", (int)len, buf);
+
+                nc->flags |= MG_F_SEND_AND_CLOSE;
+                return;
+            }
+        } else {
+            continue;
+        }
+    }
 
     // Send response
     mg_send_head(nc, 204, 0, "Content-Type: application/octet-stream");
@@ -61,57 +122,6 @@ static void authz_info_handler(struct mg_connection* nc, int ev, void* ev_data) 
 static void temperature_handler(struct mg_connection* nc, int ev, void* ev_data) {
     mg_printf(nc, "HTTP/1.0 200 OK\r\n\r\n[Temperature: 30C, cbor: %s]", CBOR_VERSION);
     nc->flags |= MG_F_SEND_AND_CLOSE;
-}
-
-static void gen_random(byte* out, int size) {
-    RNG rng;
-    wc_InitRng(&rng);
-
-    wc_RNG_GenerateBlock(&rng, out, size);
-}
-
-static void aes() {
-    byte key[16] = { 0x03, 0xbd, 0x56, 0xc3, 0x50, 0x26, 0x9c, 0xcd, 0xae, 0x87, 0x2b, 0xf0, 0xa4, 0xf5, 0xec, 0xb1 };
-
-    byte plain[14] = "asecretmessage";
-    byte cipher[sizeof(plain)];
-    byte nonce[7] = { 0xa7, 0x5b, 0xbf, 0x7a, 0x7c, 0x17, 0xaa };
-    byte aad[9] = "publicaad";
-    byte tag[8];
-
-    rs_encrypt(cipher, plain, sizeof(plain), key, nonce, tag, aad, sizeof(aad));
-
-    memset(plain, 0, sizeof(plain));
-
-    rs_decrypt(plain, cipher, sizeof(cipher), key, nonce, tag, aad, sizeof(aad));
-
-    printf("%.*s\n", sizeof(plain), plain);
-}
-
-static void ecdsa() {
-    RNG rng;
-    wc_InitRng(&rng);
-
-    ecc_key key;
-
-    char qx[] = "b46df9b9467df092dbcd5c79a7818a8e98039c78580c0ad018e71efd886e16c9";
-    char qy[] = "ddf6dd34cf08e6ed51b92205f08bf43f56008564bf6044a1ad5bcf42b3ebee1a";
-    char d[] = "94f7d46cb97b7bf61dd23018b180a206993be622837930c2a66c18b92d2e9def";
-
-    wc_ecc_import_raw_ex(&key, qx, qy, d, ECC_SECP256R1);
-    wc_ecc_check_key(&key);
-
-    byte message[] = "This is a message";
-    byte buf[1024];
-    byte sig[512];
-    byte digest[SHA256_DIGEST_SIZE];
-
-    Sha256 sha;
-    wc_InitSha256(&sha);
-    wc_Sha256Update(&sha, message, sizeof(message));
-    wc_Sha256Final(&sha, digest);
-
-    phex(digest, sizeof(digest));
 }
 
 #pragma clang diagnostic push
@@ -127,9 +137,6 @@ int main(void) {
 
     mg_register_http_endpoint(c, "/authz-info", authz_info_handler);
     mg_register_http_endpoint(c, "/temperature", temperature_handler);
-
-    //aes();
-    //ecdsa();
 
     for (;;) {
         mg_mgr_poll(&mgr, 1000);

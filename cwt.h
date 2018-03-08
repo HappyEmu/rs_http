@@ -26,6 +26,7 @@ typedef struct rs_cwt {
 
 void cwt_parse(rs_cwt* cwt, cbor_item_t *encoded);
 int cwt_verify(rs_cwt* cwt, cbor_item_t *external_aad, rs_key* key);
+size_t cwt_get_payload(rs_cwt* cwt, cbor_item_t** payload);
 
 
 #endif //RS_HTTP_CWT_H
