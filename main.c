@@ -7,14 +7,10 @@
 
 #include "mongoose.h"
 #include "symmetric.h"
+#include "cwt.h"
+#include "utils.h"
 
 static const char *s_http_port = "8000";
-static void phex(byte* ary, size_t len) {
-    for (unsigned int i = 0; i < len; i++) {
-        printf("%02x", ary[i]);
-    }
-    printf("\n");
-}
 
 static void ev_handler(struct mg_connection *c, int ev, void *p) {
     if (ev == MG_EV_HTTP_REQUEST) {
@@ -28,27 +24,20 @@ static void ev_handler(struct mg_connection *c, int ev, void *p) {
 }
 
 static void authz_info_handler(struct mg_connection* nc, int ev, void* ev_data) {
-    /* Preallocate the map structure */
-    cbor_item_t * root = cbor_new_definite_map(2);
-    /* Add the content */
-    cbor_map_add(root, (struct cbor_pair) {
-            .key = cbor_move(cbor_build_string("Is CBOR awesome?")),
-            .value = cbor_move(cbor_build_bool(true))
-    });
-    cbor_map_add(root, (struct cbor_pair) {
-            .key = cbor_move(cbor_build_uint8(42)),
-            .value = cbor_move(cbor_build_string("Is the answer"))
-    });
+    // Parse HTTP Message
+    struct http_message *hm = (struct http_message *) ev_data;
+    struct mg_str cwt = hm->body;
 
+    phex(cwt.p, cwt.len);
 
-    unsigned char * payload;
-    size_t buffer_size, length = cbor_serialize_alloc(root, &payload, &buffer_size);
+    // Parse CWT
+    struct cbor_load_result res;
+    cbor_item_t* cbor_cwt = cbor_load((cbor_data) cwt.p, cwt.len, &res);
+    cwt_parse(cbor_cwt);
+    cbor_decref(&cbor_cwt);
 
-    mg_send_head(nc, 200, length, "Content-Type: application/octet-stream");
-    mg_send(nc, payload, length);
-
-    cbor_decref(&root);
-
+    // Send response
+    mg_send_head(nc, 204, 0, "Content-Type: application/octet-stream");
     nc->flags |= MG_F_SEND_AND_CLOSE;
 }
 
@@ -79,7 +68,7 @@ static void aes() {
 
     rs_decrypt(plain, cipher, sizeof(cipher), key, nonce, tag, aad, sizeof(aad));
 
-    printf("%.*s", sizeof(plain), plain);
+    printf("%.*s\n", sizeof(plain), plain);
 }
 
 static void ecdsa() {
@@ -122,8 +111,8 @@ int main(void) {
     mg_register_http_endpoint(c, "/authz-info", authz_info_handler);
     mg_register_http_endpoint(c, "/temperature", temperature_handler);
 
-    aes();
-    ecdsa();
+    //aes();
+    //ecdsa();
 
     for (;;) {
         mg_mgr_poll(&mgr, 1000);
