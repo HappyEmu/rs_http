@@ -8,6 +8,7 @@
 #include "mongoose.h"
 #include "symmetric.h"
 #include "cwt.h"
+#include "edhoc.h"
 #include "utils.h"
 
 #define AUDIENCE "tempSensor0"
@@ -20,6 +21,13 @@ static struct rs_key AS_KEY = {
         .d = NULL,
         .curve_id = ECC_SECP256R1
 };
+
+static edhoc_server_session_state edhoc_state;
+
+
+
+static void edhoc_handler_message_1(struct mg_connection* nc, int ev, void* ev_data) ;
+static void edhoc_handler_message_3(struct mg_connection* nc, int ev, void* ev_data) ;
 
 static size_t error_buffer(char* buf, size_t buf_len, char* text) {
     cbor_item_t* error = cbor_new_definite_map(1);
@@ -70,18 +78,11 @@ static void authz_info_handler(struct mg_connection* nc, int ev, void* ev_data) 
 
     if (verified != 1) {
         // Not authorized!
-        cbor_item_t* error = cbor_new_definite_map(1);
-        struct cbor_pair entry = {
-                .key = cbor_build_string("error"),
-                .value = cbor_build_string("Signature could not be verified!")
-        };
-        cbor_map_add(error, entry);
+        char buf[128];
+        size_t len = error_buffer(buf, sizeof(buf), "Signature could not be verified!");
 
-        byte buf[128];
-        size_t length = cbor_serialize(error, &buf, sizeof(buf));
-
-        mg_send_head(nc, 401, length, "Content-Type: application/octet-stream");
-        mg_printf(nc, "%.*s", (int)length, buf);
+        mg_send_head(nc, 401, len, "Content-Type: application/octet-stream");
+        mg_printf(nc, "%.*s", (int)len, buf);
 
         nc->flags |= MG_F_SEND_AND_CLOSE;
         return;
@@ -124,6 +125,80 @@ static void temperature_handler(struct mg_connection* nc, int ev, void* ev_data)
     nc->flags |= MG_F_SEND_AND_CLOSE;
 }
 
+static void edhoc_handler(struct mg_connection* nc, int ev, void* ev_data) {
+    struct http_message *hm = (struct http_message *) ev_data;
+
+    char method[8];
+    sprintf(method, "%.*s", hm->method.len, hm->method.p);
+
+    if (strcmp(method, "POST") != 0) {
+        mg_send_head(nc, 404, 0, NULL);
+        nc->flags |= MG_F_SEND_AND_CLOSE;
+        return;
+    }
+
+    struct cbor_load_result res;
+    cbor_item_t* edhoc_msg_decoded = cbor_load((cbor_data) hm->body.p, hm->body.len, &res);
+
+    uint8_t tag = cbor_get_uint8(cbor_array_get(edhoc_msg_decoded, 0));
+
+    switch (tag) {
+        case 1:
+            edhoc_handler_message_1(nc, ev, ev_data);
+            break;
+        case 3:
+            edhoc_handler_message_3(nc, ev, ev_data);
+            break;
+        default: break;
+    }
+
+    mg_printf(nc, "HTTP/1.0 200 OK\r\n\r\n[Temperature: 30C, cbor: %s]", CBOR_VERSION);
+    nc->flags |= MG_F_SEND_AND_CLOSE;
+
+    cbor_decref(&edhoc_msg_decoded);
+}
+
+static void edhoc_handler_message_1(struct mg_connection* nc, int ev, void* ev_data) {
+    struct http_message *hm = (struct http_message *) ev_data;
+
+    struct cbor_load_result res;
+    cbor_item_t* edhoc_msg = cbor_load((cbor_data) hm->body.p, hm->body.len, &res);
+
+    // Read msg1
+    edhoc_msg_1 msg1;
+    edhoc_deserialize_msg1(&msg1, edhoc_msg);
+
+    // Save message1 for later
+    edhoc_state.message1 = (struct bytes) { hm->body.p, hm->body.len };
+
+    // Generate random session id
+    RNG rng;
+    wc_InitRng(&rng);
+
+    byte session_id[2];
+    wc_RNG_GenerateBlock(&rng, session_id, 2);
+    edhoc_state.session_id = (bytes){ session_id, 2 };
+
+    // Generate nonce
+    byte nonce[8];
+    wc_RNG_GenerateBlock(&rng, nonce, 8);
+
+
+    cbor_decref(&edhoc_msg);
+}
+
+static void edhoc_handler_message_3(struct mg_connection* nc, int ev, void* ev_data) {
+    struct http_message *hm = (struct http_message *) ev_data;
+
+    struct cbor_load_result res;
+    cbor_item_t* edhoc_msg = cbor_load((cbor_data) hm->body.p, hm->body.len, &res);
+
+    edhoc_msg_3 msg3;
+    edhoc_deserialize_msg3(&msg3, edhoc_msg);
+
+    cbor_decref(&edhoc_msg);
+}
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-noreturn"
 #pragma ide diagnostic ignored "OCDFAInspection"
@@ -136,6 +211,7 @@ int main(void) {
     mg_set_protocol_http_websocket(c);
 
     mg_register_http_endpoint(c, "/authz-info", authz_info_handler);
+    mg_register_http_endpoint(c, "/.well-known/edhoc", edhoc_handler);
     mg_register_http_endpoint(c, "/temperature", temperature_handler);
 
     for (;;) {
