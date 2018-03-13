@@ -1,15 +1,16 @@
-#include <cbor.h>
 #include <wolfssl/options.h>
 #include <wolfssl/ssl.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/dsa.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
+#include "tinycbor.h"
 
 #include "mongoose.h"
 #include "symmetric.h"
 #include "cwt.h"
 #include "edhoc.h"
 #include "utils.h"
+#include "rs_types.h"
 
 #define AUDIENCE "tempSensor0"
 
@@ -32,18 +33,18 @@ static edhoc_server_session_state edhoc_state;
 static void edhoc_handler_message_1(struct mg_connection* nc, int ev, void* ev_data) ;
 static void edhoc_handler_message_3(struct mg_connection* nc, int ev, void* ev_data) ;
 
-static size_t error_buffer(char* buf, size_t buf_len, char* text) {
-    cbor_item_t* error = cbor_new_definite_map(1);
-    struct cbor_pair entry = {
-            .key = cbor_build_string("error"),
-            .value = cbor_build_string(text)
-    };
-    cbor_map_add(error, entry);
+static size_t error_buffer(uint8_t* buf, size_t buf_len, char* text) {
+    CborEncoder enc;
+    cbor_encoder_init(&enc, buf, buf_len, 0);
 
-    size_t length = cbor_serialize(error, buf, buf_len);
-    cbor_decref(&error);
+    CborEncoder map;
+    cbor_encoder_create_map(&enc, &map, 1);
 
-    return length;
+    cbor_encode_text_stringz(&map, "error");
+    cbor_encode_text_stringz(&map, text);
+    cbor_encoder_close_container(&enc, &map);
+
+    return cbor_encoder_get_buffer_size(&enc, buf);
 }
 
 static void ev_handler(struct mg_connection *c, int ev, void *p) {
@@ -63,21 +64,17 @@ static void authz_info_handler(struct mg_connection* nc, int ev, void* ev_data) 
     struct mg_str cwt = hm->body;
 
     printf("Received CWT: ");
-    phex(cwt.p, cwt.len);
+    phex((void*)cwt.p, cwt.len);
 
     // Parse CWT
-    struct cbor_load_result res;
-    cbor_item_t* cbor_cwt = cbor_load((cbor_data) cwt.p, cwt.len, &res);
 
     rs_cwt parsed_cwt;
-    cwt_parse(&parsed_cwt, cbor_cwt);
+    cwt_parse(&parsed_cwt, (void*) cwt.p, cwt.len);
 
     // Verify CWT
-    byte eaad[0];
-    cbor_item_t* c_eaad = cbor_build_bytestring(eaad, 0);
+    bytes eaad = {.buf = NULL, .len = 0};
 
-    int verified = cwt_verify(&parsed_cwt, c_eaad, &AS_KEY);
-    cbor_decref(&cbor_cwt);
+    int verified = cwt_verify(&parsed_cwt, eaad, &AS_KEY);
 
     if (verified != 1) {
         // Not authorized!
@@ -91,7 +88,7 @@ static void authz_info_handler(struct mg_connection* nc, int ev, void* ev_data) 
         return;
     }
 
-    // Check audience
+    /*// Check audience
     cbor_item_t *payload;
     cwt_get_payload(&parsed_cwt, &payload);
 
@@ -162,7 +159,7 @@ static void authz_info_handler(struct mg_connection* nc, int ev, void* ev_data) 
         }
 
         // TODO: extract PoP key and use for EDHOC verification
-    }
+    }*/
 
     // Send response
     mg_send_head(nc, 204, 0, "Content-Type: application/octet-stream");
@@ -170,7 +167,7 @@ static void authz_info_handler(struct mg_connection* nc, int ev, void* ev_data) 
 }
 
 static void temperature_handler(struct mg_connection* nc, int ev, void* ev_data) {
-    mg_printf(nc, "HTTP/1.0 200 OK\r\n\r\n[Temperature: 30C, cbor: %s]", CBOR_VERSION);
+    mg_printf(nc, "HTTP/1.0 200 OK\r\n\r\n[Temperature: 30C, cbor: %i]", TINYCBOR_VERSION);
     nc->flags |= MG_F_SEND_AND_CLOSE;
 }
 
@@ -186,10 +183,12 @@ static void edhoc_handler(struct mg_connection* nc, int ev, void* ev_data) {
         return;
     }
 
-    struct cbor_load_result res;
-    cbor_item_t* edhoc_msg_decoded = cbor_load((cbor_data) hm->body.p, hm->body.len, &res);
+    CborParser parser;
+    CborValue val;
+    cbor_parser_init((void*)hm->body.p, hm->body.len, 0, &parser, &val);
 
-    uint8_t tag = cbor_get_uint8(cbor_array_get(edhoc_msg_decoded, 0));
+    CborTag tag;
+    cbor_value_get_tag(&val, &tag);
 
     switch (tag) {
         case 1:
@@ -201,24 +200,19 @@ static void edhoc_handler(struct mg_connection* nc, int ev, void* ev_data) {
         default: break;
     }
 
-    mg_printf(nc, "HTTP/1.0 200 OK\r\n\r\n[Temperature: 30C, cbor: %s]", CBOR_VERSION);
+    mg_printf(nc, "HTTP/1.0 200 OK\r\n\r\n[Temperature: 30C, cbor: %i]", TINYCBOR_VERSION);
     nc->flags |= MG_F_SEND_AND_CLOSE;
-
-    cbor_decref(&edhoc_msg_decoded);
 }
 
 static void edhoc_handler_message_1(struct mg_connection* nc, int ev, void* ev_data) {
     struct http_message *hm = (struct http_message *) ev_data;
 
-    struct cbor_load_result res;
-    cbor_item_t* edhoc_msg = cbor_load((cbor_data) hm->body.p, hm->body.len, &res);
-
     // Read msg1
     edhoc_msg_1 msg1;
-    edhoc_deserialize_msg1(&msg1, edhoc_msg);
+    edhoc_deserialize_msg1(&msg1, (void*)hm->body.p, hm->body.len);
 
     // Save message1 for later
-    edhoc_state.message1 = (struct bytes) { hm->body.p, hm->body.len };
+    edhoc_state.message1 = (struct bytes) { (void*)hm->body.p, hm->body.len };
 
     // Generate random session id
     RNG rng;
@@ -248,20 +242,14 @@ static void edhoc_handler_message_1(struct mg_connection* nc, int ev, void* ev_d
 
     mg_send_head(nc, 200, len, "Content-Type: application/octet-stream");
     mg_printf(nc, "%.*s", (int)len, msg_serialized);
-
-    cbor_decref(&edhoc_msg);
 }
 
 static void edhoc_handler_message_3(struct mg_connection* nc, int ev, void* ev_data) {
     struct http_message *hm = (struct http_message *) ev_data;
 
-    struct cbor_load_result res;
-    cbor_item_t* edhoc_msg = cbor_load((cbor_data) hm->body.p, hm->body.len, &res);
-
     edhoc_msg_3 msg3;
-    edhoc_deserialize_msg3(&msg3, edhoc_msg);
+    edhoc_deserialize_msg3(&msg3, (void*)hm->body.p, hm->body.len);
 
-    cbor_decref(&edhoc_msg);
 }
 
 #pragma clang diagnostic push
@@ -273,15 +261,6 @@ int main(void) {
 
     mg_mgr_init(&mgr, NULL);
     c = mg_bind(&mgr, s_http_port, ev_handler);
-
-    // Some tests
-    char* hex = "0123456789ABCDEF";
-    char* buf;
-    size_t len = hexstring_to_buffer(&buf, hex, strlen(hex));
-    printf("%s", buf);
-
-    unsigned char* hex2;
-    len = buffer_to_hexstring(&hex2, buf, len);
 
     mg_register_http_endpoint(c, "/authz-info", authz_info_handler);
     mg_register_http_endpoint(c, "/.well-known/edhoc", edhoc_handler);

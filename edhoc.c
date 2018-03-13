@@ -4,50 +4,71 @@
 
 #include "edhoc.h"
 
+void edhoc_deserialize_msg1(edhoc_msg_1 *msg1, uint8_t* buffer, size_t len) {
+    CborParser parser;
+    CborValue value;
 
+    cbor_parser_init(buffer, len, 0, &parser, &value);
 
-void edhoc_deserialize_msg1(edhoc_msg_1 *msg1, cbor_item_t *encoded) {
-    cbor_item_t* tag        = cbor_array_get(encoded, 0);
-    cbor_item_t* session_id = cbor_array_get(encoded, 1);
-    cbor_item_t* nonce      = cbor_array_get(encoded, 2);
-    cbor_item_t* key        = cbor_array_get(encoded, 3);
+    CborValue elem;
+    cbor_value_enter_container(&value, &elem);
 
-    byte* b_session_id = cbor_bytestring_handle(session_id);
-    byte* b_nonce      = cbor_bytestring_handle(nonce);
-    byte* b_key        = cbor_bytestring_handle(key);
+    cbor_value_get_tag(&elem, (CborTag *) &msg1->tag);
+    cbor_value_advance(&elem);
 
-    msg1->tag = cbor_get_uint8(tag);
-    msg1->session_id = (struct bytes) { b_session_id, cbor_bytestring_length(session_id) };
-    msg1->nonce      = (struct bytes) { b_nonce,      cbor_bytestring_length(nonce) };
-    msg1->eph_key    = (struct bytes) { b_key,        cbor_bytestring_length(key) };
+    cbor_value_dup_byte_string(&elem, &msg1->session_id.buf, &msg1->session_id.len, &elem);
+    cbor_value_advance(&elem);
+
+    cbor_value_dup_byte_string(&elem, &msg1->nonce.buf, &msg1->nonce.len, &elem);
+    cbor_value_advance(&elem);
+
+    cbor_value_dup_byte_string(&elem, &msg1->eph_key.buf, &msg1->eph_key.len, &elem);
 }
 
-void edhoc_deserialize_msg3(edhoc_msg_3 *msg3, cbor_item_t *encoded) {
-    cbor_item_t* tag          = cbor_array_get(encoded, 0);
-    cbor_item_t* peer_sess_id = cbor_array_get(encoded, 1);
-    cbor_item_t* cose_enc_3   = cbor_array_get(encoded, 2);
+void edhoc_deserialize_msg3(edhoc_msg_3 *msg3, uint8_t* buffer, size_t len) {
+    CborParser parser;
+    CborValue value;
 
-    byte* b_peer_session_id = cbor_bytestring_handle(peer_sess_id);
-    byte* b_cose_enc_3      = cbor_bytestring_handle(cose_enc_3);
+    cbor_parser_init(buffer, len, 0, &parser, &value);
 
-    msg3->tag = cbor_get_uint8(tag);
-    msg3->peer_session_id = (struct bytes) { b_peer_session_id, cbor_bytestring_length(peer_sess_id) };
-    msg3->cose_enc_3      = (struct bytes) { b_cose_enc_3,      cbor_bytestring_length(cose_enc_3) };
+    CborValue element;
+    cbor_value_enter_container(&value, &element);
+
+    CborTag tag;
+    cbor_value_get_tag(&element, &tag);
+
+    cbor_value_advance(&element);
+
+    uint8_t* peer_sess_id;
+    size_t peer_sess_id_length;
+    cbor_value_dup_byte_string(&element, &peer_sess_id, &peer_sess_id_length, &element);
+
+    cbor_value_advance(&element);
+
+    uint8_t* cose_enc_3;
+    size_t cose_enc_3_length;
+    cbor_value_dup_byte_string(&element, &cose_enc_3, &cose_enc_3_length, &element);
+
+    msg3->tag = (uint8_t) tag;
+    msg3->peer_session_id = (struct bytes) { peer_sess_id, peer_sess_id_length };
+    msg3->cose_enc_3      = (struct bytes) { cose_enc_3,   cose_enc_3_length };
 }
 
 size_t edhoc_serialize_msg_2(edhoc_msg_2 *msg2, unsigned char* buffer, size_t buf_size) {
-    cbor_item_t* msg2_cbor = cbor_new_definite_array(6);
+    CborEncoder enc;
+    cbor_encoder_init(&enc, buffer, buf_size, 0);
 
-    cbor_array_push(msg2_cbor, cbor_build_uint8(msg2->tag));
-    cbor_array_push(msg2_cbor, cbor_build_bytestring(msg2->session_id.b, msg2->session_id.len));
-    cbor_array_push(msg2_cbor, cbor_build_bytestring(msg2->peer_session_id.b, msg2->peer_session_id.len));
-    cbor_array_push(msg2_cbor, cbor_build_bytestring(msg2->peer_nonce.b, msg2->peer_nonce.len));
-    cbor_array_push(msg2_cbor, cbor_build_bytestring(msg2->peer_key.b, msg2->peer_key.len));
-    cbor_array_push(msg2_cbor, cbor_build_bytestring(msg2->cose_enc_2.b, msg2->cose_enc_2.len));
+    CborEncoder ary;
+    cbor_encoder_create_array(&enc, &ary, 6);
 
-    // Serialize to buffer
-    size_t len = cbor_serialize_array(msg2_cbor, buffer, buf_size);
+    cbor_encode_tag(&ary, msg2->tag);
+    cbor_encode_byte_string(&ary, msg2->session_id.buf, msg2->session_id.len);
+    cbor_encode_byte_string(&ary, msg2->peer_session_id.buf, msg2->peer_session_id.len);
+    cbor_encode_byte_string(&ary, msg2->peer_nonce.buf, msg2->peer_nonce.len);
+    cbor_encode_byte_string(&ary, msg2->peer_key.buf, msg2->peer_key.len);
+    cbor_encode_byte_string(&ary, msg2->cose_enc_2.buf, msg2->cose_enc_2.len);
 
-    cbor_decref(&msg2_cbor);
-    return len;
+    cbor_encoder_close_container(&enc, &ary);
+
+    return cbor_encoder_get_buffer_size(&enc, buffer);
 }

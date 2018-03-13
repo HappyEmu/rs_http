@@ -5,7 +5,8 @@
 #ifndef RS_HTTP_CWT_H
 #define RS_HTTP_CWT_H
 
-#include <cbor.h>
+#include "tinycbor.h"
+#include "rs_types.h"
 #include <wolfssl/options.h>
 #include <wolfssl/wolfcrypt/types.h>
 #include <wolfssl/wolfcrypt/ecc.h>
@@ -18,15 +19,14 @@ typedef struct rs_key {
 } rs_key;
 
 typedef struct rs_cwt {
-    cbor_item_t* protected;
-    cbor_item_t* unprotected;
-    cbor_item_t* payload;
-    cbor_item_t* signature;
+    CborValue protected;
+    CborValue unprotected;
+    CborValue payload;
+    CborValue signature;
 } rs_cwt;
 
-void cwt_parse(rs_cwt* cwt, cbor_item_t *encoded);
-int cwt_verify(rs_cwt* cwt, cbor_item_t *external_aad, rs_key* key);
-size_t cwt_get_payload(rs_cwt* cwt, cbor_item_t** payload);
+void cwt_parse(rs_cwt* cwt, uint8_t* encoded, size_t len);
+int cwt_verify(rs_cwt* cwt, bytes eaad, rs_key* key);
 
 
 #endif //RS_HTTP_CWT_H

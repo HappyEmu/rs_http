@@ -9,12 +9,8 @@
 #include <wolfssl/options.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/types.h>
-#include <cbor.h>
-
-typedef struct bytes {
-    byte* b;
-    size_t len;
-} bytes;
+#include "tinycbor.h"
+#include "rs_types.h"
 
 typedef struct edhoc_msg_1 {
     uint8_t tag;
@@ -48,7 +44,7 @@ typedef struct edhoc_server_session_state {
 
 size_t edhoc_serialize_msg_2(edhoc_msg_2 *msg2, unsigned char* buffer, size_t buf_size);
 
-void edhoc_deserialize_msg1(edhoc_msg_1* msg1, cbor_item_t* encoded);
-void edhoc_deserialize_msg3(edhoc_msg_3* msg3, cbor_item_t* encoded);
+void edhoc_deserialize_msg1(edhoc_msg_1 *msg1, uint8_t* buffer, size_t len);
+void edhoc_deserialize_msg3(edhoc_msg_3 *msg3, uint8_t* buffer, size_t len);
 
 #endif //RS_HTTP_EDHOC_H

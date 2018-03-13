@@ -3,5 +3,8 @@ project(rs_http C)
 
 set(CMAKE_C_STANDARD 99)
 
-add_executable(rs_http main.c symmetric.c symmetric.h cwt.c cwt.h utils.c utils.h edhoc.c edhoc.h)
-target_link_libraries(rs_http mongoose cbor wolfssl)
+link_directories(${CMAKE_SOURCE_DIR}/lib)
+include_directories(include)
+
+add_executable(rs_http main.c symmetric.c symmetric.h cwt.c cwt.h utils.c utils.h edhoc.c edhoc.h rs_types.h)
+target_link_libraries(rs_http mongoose wolfssl tinycbor)
