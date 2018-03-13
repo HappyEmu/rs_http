@@ -13,6 +13,9 @@
 
 #define AUDIENCE "tempSensor0"
 
+#define CBOR_LABEL_COSE_KEY 25
+#define CBOR_LABEL_AUDIENCE 3
+
 static const char *s_http_port = "8000";
 
 static struct rs_key AS_KEY = {
@@ -89,30 +92,76 @@ static void authz_info_handler(struct mg_connection* nc, int ev, void* ev_data) 
     }
 
     // Check audience
-    cbor_item_t* payload;
+    cbor_item_t *payload;
     cwt_get_payload(&parsed_cwt, &payload);
 
-    struct cbor_pair* entries = cbor_map_handle(payload);
+    struct cbor_pair *entries = cbor_map_handle(payload);
     for (int i = 0; i < cbor_map_size(payload); i++) {
         uint8_t label = cbor_get_uint8(entries[i].key);
+        cbor_item_t* value = entries[i].value;
 
-        if (label == 3) {
-            char audience[cbor_string_length(entries[i].value) + 1];
-            strcpy(audience, cbor_string_handle(entries[i].value));
+        if (label == CBOR_LABEL_AUDIENCE) {
+            char audience[cbor_string_length(value) + 1];
+            strcpy(audience, cbor_string_handle(value));
 
             if (strcmp(audience, AUDIENCE) != 0) {
                 char buf[128];
                 size_t len = error_buffer(buf, sizeof(buf), "Audience mismatch!");
 
                 mg_send_head(nc, 403, len, "Content-Type: application/octet-stream");
-                mg_printf(nc, "%.*s", (int)len, buf);
+                mg_printf(nc, "%.*s", (int) len, buf);
 
                 nc->flags |= MG_F_SEND_AND_CLOSE;
                 return;
             }
+        } else if (label == CBOR_LABEL_COSE_KEY) {
+            struct cbor_pair *cnf = cbor_map_handle(value);
+            cbor_item_t* cose_key = cnf[0].value;
+
+            bytes cose_key_ = { cbor_bytestring_handle(cose_key), cbor_bytestring_length(cose_key) };
+            phex(cose_key_.b, cose_key_.len);
+
+            cbor_item_t* cose_key_map = cbor_load(cose_key_.b, cose_key_.len, &res);
+            struct cbor_pair* cose_key_pairs = cbor_map_handle(cose_key_map);
+
+            unsigned char *xcoord, *ycoord;
+
+            for (int j = 0; j < cbor_map_size(cose_key_map); j++) {
+                uint8_t key_label = cbor_get_uint8(cose_key_pairs[j].key);
+                cbor_type type = cose_key_pairs[j].key->type;
+                cbor_item_t* key_value = cose_key_pairs[j].value;
+
+                if (key_label == 1 && type == CBOR_TYPE_NEGINT) {
+                    // x-coord
+                    unsigned char* hex_string;
+                    cbor_item_t* tag_item = cbor_tag_item(key_value);
+                    byte* buffer = cbor_bytestring_handle(tag_item);
+                    buffer_to_hexstring(&hex_string, buffer, cbor_bytestring_length(tag_item));
+
+                    printf("X-Coord: %s\n", hex_string);
+                    xcoord = hex_string;
+                } else if (key_label == 2 && type == CBOR_TYPE_NEGINT) {
+                    unsigned char* hex_string;
+                    cbor_item_t* tag_item = cbor_tag_item(key_value);
+                    byte* buffer = cbor_bytestring_handle(tag_item);
+                    buffer_to_hexstring(&hex_string, buffer, cbor_bytestring_length(tag_item));
+
+                    printf("Y-Coord: %s\n", hex_string);
+                    ycoord = hex_string;
+                }
+            }
+
+            ecc_key pop_key;
+            wc_ecc_import_raw_ex(&pop_key, xcoord, ycoord, NULL, ECC_SECP256R1);
+            int key_check = wc_ecc_check_key(&pop_key);
+
+            edhoc_state.pop_key = pop_key;
+
         } else {
             continue;
         }
+
+        // TODO: extract PoP key and use for EDHOC verification
     }
 
     // Send response
@@ -175,7 +224,7 @@ static void edhoc_handler_message_1(struct mg_connection* nc, int ev, void* ev_d
     RNG rng;
     wc_InitRng(&rng);
 
-    byte session_id[2];
+    byte* session_id = malloc(2);
     wc_RNG_GenerateBlock(&rng, session_id, 2);
     edhoc_state.session_id = (bytes){ session_id, 2 };
 
@@ -183,6 +232,22 @@ static void edhoc_handler_message_1(struct mg_connection* nc, int ev, void* ev_d
     byte nonce[8];
     wc_RNG_GenerateBlock(&rng, nonce, 8);
 
+    byte nonsense[16];
+
+    edhoc_msg_2 msg2 = {
+            .tag = 2,
+            .session_id = msg1.session_id,
+            .peer_session_id = edhoc_state.session_id,
+            .peer_nonce = {nonce, 8},
+            .peer_key = {nonsense, sizeof(nonsense)},
+            .cose_enc_2 = {nonsense, sizeof(nonsense)}
+    };
+
+    unsigned char msg_serialized[256];
+    size_t len = edhoc_serialize_msg_2(&msg2, msg_serialized, sizeof(msg_serialized));
+
+    mg_send_head(nc, 200, len, "Content-Type: application/octet-stream");
+    mg_printf(nc, "%.*s", (int)len, msg_serialized);
 
     cbor_decref(&edhoc_msg);
 }
@@ -208,7 +273,15 @@ int main(void) {
 
     mg_mgr_init(&mgr, NULL);
     c = mg_bind(&mgr, s_http_port, ev_handler);
-    mg_set_protocol_http_websocket(c);
+
+    // Some tests
+    char* hex = "0123456789ABCDEF";
+    char* buf;
+    size_t len = hexstring_to_buffer(&buf, hex, strlen(hex));
+    printf("%s", buf);
+
+    unsigned char* hex2;
+    len = buffer_to_hexstring(&hex2, buf, len);
 
     mg_register_http_endpoint(c, "/authz-info", authz_info_handler);
     mg_register_http_endpoint(c, "/.well-known/edhoc", edhoc_handler);

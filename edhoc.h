@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 #include <wolfssl/options.h>
+#include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/types.h>
 #include <cbor.h>
 
@@ -39,12 +40,13 @@ typedef struct edhoc_msg_3 {
 
 typedef struct edhoc_server_session_state {
     bytes session_id;
+    ecc_key pop_key;
     bytes message1;
     bytes message2;
     bytes message3;
 } edhoc_server_session_state;
 
-size_t edhoc_serialize_msg_2(edhoc_msg_1* msg2);
+size_t edhoc_serialize_msg_2(edhoc_msg_2 *msg2, unsigned char* buffer, size_t buf_size);
 
 void edhoc_deserialize_msg1(edhoc_msg_1* msg1, cbor_item_t* encoded);
 void edhoc_deserialize_msg3(edhoc_msg_3* msg3, cbor_item_t* encoded);
