@@ -46,10 +46,43 @@ int cwt_verify(rs_cwt* cwt, bytes eaad, rs_key* key) {
 
     uint8_t* protected;
     size_t len;
-    cbor_value_dup_byte_string(cwt->h_protected, &protected, &len)
-    cbor_encode_byte_string(&enc, NULL);
-    
-    return 1;
+    cbor_value_dup_byte_string(&cwt->h_protected, &protected, &len, NULL);
+    cbor_encode_byte_string(&ary, protected, len);
+    free(protected);
+
+    cbor_encode_byte_string(&ary, eaad.buf, eaad.len);
+
+    uint8_t* payload;
+    size_t p_len;
+    cbor_value_dup_byte_string(&cwt->payload, &payload, &p_len, NULL);
+    cbor_encode_byte_string(&ary, payload, p_len);
+    free(payload);
+
+    cbor_encoder_close_container(&enc, &ary);
+    size_t buf_len = cbor_encoder_get_buffer_size(&enc, buffer);
+
+    // Import key
+    ecc_key as_key;
+    wc_ecc_import_raw_ex(&as_key, key->x, key->y, key->d, key->curve_id);
+
+    // Compute digest
+    Sha256 sha;
+    byte digest[SHA256_DIGEST_SIZE];
+    wc_InitSha256(&sha);
+    wc_Sha256Update(&sha, buffer, (word32) buf_len);
+    wc_Sha256Final(&sha, digest);
+
+    // Extract Signature
+    uint8_t* signature;
+    size_t sig_len;
+    cbor_value_dup_byte_string(&cwt->signature, &signature, &sig_len, NULL);
+
+    int ret, verified = 0;
+    ret = wc_ecc_verify_hash(signature, (word32) sig_len, digest, sizeof(digest), &verified, &as_key);
+
+    free(signature);
+
+    return verified;
 }
 
 void cwt_parse_payload(rs_cwt* cwt, rs_payload* out) {

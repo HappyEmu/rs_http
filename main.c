@@ -217,7 +217,7 @@ int main(void) {
     mg_register_http_endpoint(c, "/authz-info", authz_info_handler);
     mg_register_http_endpoint(c, "/.well-known/edhoc", edhoc_handler);
     mg_register_http_endpoint(c, "/temperature", temperature_handler);
-
+    
     wc_ecc_init(&RS_KEY);
     RNG rng;
     wc_InitRng(&rng);
