@@ -13,10 +13,10 @@ void phex(byte* ary, size_t len) {
     printf("\n");
 }
 
-size_t buffer_to_hexstring(unsigned char **string, byte *buffer, size_t buf_len) {
+size_t buffer_to_hexstring(char **string, byte *buffer, size_t buf_len) {
     size_t out_len = 2*buf_len + 1;
-    unsigned char* block = malloc(out_len);
-    unsigned char* p = block;
+    char* block = malloc(out_len);
+    char* p = block;
 
     for (int i = 0; i < buf_len; i++) {
         p += sprintf(p, "%02x", buffer[i]);
