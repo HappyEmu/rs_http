@@ -29,8 +29,6 @@ static ecc_key RS_KEY;
 
 static edhoc_server_session_state edhoc_state;
 
-
-
 static void edhoc_handler_message_1(struct mg_connection* nc, int ev, void* ev_data) ;
 static void edhoc_handler_message_3(struct mg_connection* nc, int ev, void* ev_data) ;
 
@@ -104,7 +102,7 @@ static void authz_info_handler(struct mg_connection* nc, int ev, void* ev_data) 
     cwt_parse_cose_key(&payload.cnf, &cose_pop_key);
 
     ecc_key pop_key;
-    wc_ecc_import_raw_ex(&pop_key, cose_pop_key.x, cose_pop_key.y, NULL, ECC_SECP256R1);
+    cwt_import_key(&pop_key, &cose_pop_key);
     int key_check = wc_ecc_check_key(&pop_key);
 
     edhoc_state.pop_key = pop_key;
@@ -174,6 +172,28 @@ static void edhoc_handler_message_1(struct mg_connection* nc, int ev, void* ev_d
     byte nonce[8];
     wc_RNG_GenerateBlock(&rng, nonce, 8);
 
+    // Generate session key
+    ecc_key session_key;
+    wc_ecc_make_key_ex(&rng, 32, &session_key, ECC_SECP256R1);
+
+    // Compute shared secret
+    cose_key cose_eph_key;
+    cwt_parse_cose_key(&msg1.eph_key, &cose_eph_key);
+
+    ecc_key eph_key;
+    cwt_import_key(&eph_key, &cose_eph_key);
+
+    byte secret[256];
+    word32 secret_sz = sizeof(secret);
+    wc_ecc_shared_secret(&session_key, &eph_key, secret, &secret_sz);
+    printf("Shared Secret: ");
+    phex(secret, secret_sz);
+
+    // Encode session key
+    uint8_t enc_sess_key[256];
+    size_t n;
+    cwt_encode_ecc_key(&session_key, enc_sess_key, sizeof(enc_sess_key), &n);
+
     byte nonsense[16];
 
     edhoc_msg_2 msg2 = {
@@ -181,11 +201,11 @@ static void edhoc_handler_message_1(struct mg_connection* nc, int ev, void* ev_d
             .session_id = msg1.session_id,
             .peer_session_id = edhoc_state.session_id,
             .peer_nonce = {nonce, 8},
-            .peer_key = {nonsense, sizeof(nonsense)},
+            .peer_key = {enc_sess_key, n},
             .cose_enc_2 = {nonsense, sizeof(nonsense)}
     };
 
-    unsigned char msg_serialized[256];
+    unsigned char msg_serialized[64];
     size_t len = edhoc_serialize_msg_2(&msg2, msg_serialized, sizeof(msg_serialized));
 
     printf("Sending EDHOC MSG: ");
@@ -217,7 +237,7 @@ int main(void) {
     mg_register_http_endpoint(c, "/authz-info", authz_info_handler);
     mg_register_http_endpoint(c, "/.well-known/edhoc", edhoc_handler);
     mg_register_http_endpoint(c, "/temperature", temperature_handler);
-    
+
     wc_ecc_init(&RS_KEY);
     RNG rng;
     wc_InitRng(&rng);

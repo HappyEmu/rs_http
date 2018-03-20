@@ -22,8 +22,8 @@ typedef struct cose_key {
     bytes kid;
     uint8_t kty;
     uint8_t crv;
-    char* x;
-    char* y;
+    bytes x;
+    bytes y;
 } cose_key;
 
 typedef struct rs_cwt {
@@ -47,6 +47,9 @@ void cwt_parse(rs_cwt* cwt, uint8_t* encoded, size_t len);
 int cwt_verify(rs_cwt* cwt, bytes eaad, rs_key* key);
 void cwt_parse_payload(rs_cwt* cwt, rs_payload*);
 void cwt_parse_cose_key(bytes* encoded, cose_key* out);
+void cwt_encode_cose_key(cose_key* key, uint8_t* buffer, size_t buf_size, size_t* len);
+void cwt_encode_ecc_key(ecc_key* key, uint8_t* buffer, size_t buf_size, size_t* len);
+void cwt_import_key(ecc_key* key, cose_key* cose);
 
 
 #endif //RS_HTTP_CWT_H

@@ -174,9 +174,7 @@ void cwt_parse_cose_key(bytes* encoded, cose_key* out) {
             size_t x_len;
             cbor_value_dup_byte_string(&elem, &x, &x_len, &elem);
 
-            char* hex_string;
-            buffer_to_hexstring(&hex_string, x, x_len);
-            out->x = hex_string;
+            out->x = (bytes) { x, x_len };
         } else if (label == CBOR_LABEL_COSE_KEY_Y) {
             // Somehow need to skip (negative) tag
             cbor_value_advance(&elem);
@@ -185,11 +183,64 @@ void cwt_parse_cose_key(bytes* encoded, cose_key* out) {
             size_t y_len;
             cbor_value_dup_byte_string(&elem, &y, &y_len, &elem);
 
-            char* hex_string;
-            buffer_to_hexstring(&hex_string, y, y_len);
-            out->y = hex_string;
+            out->y = (bytes) { y, y_len };
         } else {
             cbor_value_advance(&elem);
         }
     }
+}
+
+void cwt_encode_cose_key(cose_key* key, uint8_t* buffer, size_t buf_size, size_t* len) {
+    CborEncoder enc;
+    cbor_encoder_init(&enc, buffer, buf_size, 0);
+    
+    CborEncoder map;
+    cbor_encoder_create_map(&enc, &map, 5);
+    
+    cbor_encode_int(&map, CBOR_LABEL_COSE_KEY_KID);
+    cbor_encode_byte_string(&map, key->kid.buf, key->kid.len);
+    
+    cbor_encode_int(&map, CBOR_LABEL_COSE_KEY_KTY);
+    cbor_encode_int(&map, key->kty);
+    
+    cbor_encode_int(&map, CBOR_LABEL_COSE_KEY_CRV);
+    cbor_encode_int(&map, key->crv);
+
+    cbor_encode_int(&map, CBOR_LABEL_COSE_KEY_X);
+    cbor_encode_byte_string(&map, key->x.buf, key->x.len);
+
+    cbor_encode_int(&map, CBOR_LABEL_COSE_KEY_Y);
+    cbor_encode_byte_string(&map, key->y.buf, key->y.len);
+
+    cbor_encoder_close_container(&enc, &map);
+
+    *len = cbor_encoder_get_buffer_size(&enc, buffer);
+}
+
+void cwt_encode_ecc_key(ecc_key* key, uint8_t* buffer, size_t buf_size, size_t* len) {
+    byte x[32];
+    byte y[32];
+    word32 x_len, y_len;
+
+    // WHY TWICE NECESSARY?
+    wc_ecc_export_public_raw(key, x, &x_len, y, &y_len);
+    wc_ecc_export_public_raw(key, x, &x_len, y, &y_len);
+
+    cose_key cose = {
+            .crv = 1, // P-256
+            .kid = (bytes) {(uint8_t *) "abcd", 4},
+            .kty = 2, // EC2
+            .x = (bytes) { x, x_len },
+            .y = (bytes) { y, y_len }
+    };
+
+    cwt_encode_cose_key(&cose, buffer, buf_size, len);
+}
+
+void cwt_import_key(ecc_key* key, cose_key* cose) {
+    char *x, *y;
+    buffer_to_hexstring(&x, cose->x.buf, cose->x.len);
+    buffer_to_hexstring(&y, cose->y.buf, cose->y.len);
+
+    wc_ecc_import_raw_ex(key, x, y, NULL, ECC_SECP256R1);
 }
