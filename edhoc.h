@@ -11,6 +11,7 @@
 #include <wolfssl/wolfcrypt/types.h>
 #include "tinycbor.h"
 #include "rs_types.h"
+#include "cose.h"
 
 typedef struct edhoc_msg_1 {
     uint8_t tag;
@@ -25,7 +26,8 @@ typedef struct edhoc_msg_2 {
     bytes peer_session_id;
     bytes peer_nonce;
     bytes peer_key;
-    bytes cose_enc_2;
+    cose_sign1 _sig_v;
+    bytes _cose_enc_2;
 } edhoc_msg_2;
 
 typedef struct edhoc_msg_3 {
@@ -46,5 +48,8 @@ size_t edhoc_serialize_msg_2(edhoc_msg_2 *msg2, unsigned char* buffer, size_t bu
 
 void edhoc_deserialize_msg1(edhoc_msg_1 *msg1, uint8_t* buffer, size_t len);
 void edhoc_deserialize_msg3(edhoc_msg_3 *msg3, uint8_t* buffer, size_t len);
+
+void edhoc_aad2(edhoc_msg_2 *msg2, bytes message1, byte* out_hash);
+void edhoc_msg2_sig_v(edhoc_msg_2 *msg2, const byte* aad2);
 
 #endif //RS_HTTP_EDHOC_H

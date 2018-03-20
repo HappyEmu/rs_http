@@ -9,6 +9,7 @@
 #include "symmetric.h"
 #include "cwt.h"
 #include "edhoc.h"
+#include "cose.h"
 #include "utils.h"
 #include "rs_types.h"
 
@@ -202,10 +203,17 @@ static void edhoc_handler_message_1(struct mg_connection* nc, int ev, void* ev_d
             .peer_session_id = edhoc_state.session_id,
             .peer_nonce = {nonce, 8},
             .peer_key = {enc_sess_key, n},
-            .cose_enc_2 = {nonsense, sizeof(nonsense)}
     };
 
-    unsigned char msg_serialized[64];
+    byte aad2[SHA256_DIGEST_SIZE];
+    edhoc_aad2(&msg2, edhoc_state.message1, aad2);
+    edhoc_msg2_sig_v(&msg2, aad2);
+
+    uint8_t sig_v_serialized[256];
+    size_t sig_v_len = sizeof(sig_v_serialized);
+    cose_encode_signed(&msg2._sig_v, &RS_KEY, sig_v_serialized, sizeof(sig_v_serialized), &sig_v_len);
+
+    unsigned char msg_serialized[512];
     size_t len = edhoc_serialize_msg_2(&msg2, msg_serialized, sizeof(msg_serialized));
 
     printf("Sending EDHOC MSG: ");
