@@ -54,7 +54,55 @@ void edhoc_deserialize_msg3(edhoc_msg_3 *msg3, uint8_t* buffer, size_t len) {
     msg3->cose_enc_3      = (struct bytes) { cose_enc_3,   cose_enc_3_length };
 }
 
-size_t edhoc_serialize_msg_2(edhoc_msg_2 *msg2, unsigned char* buffer, size_t buf_size) {
+size_t edhoc_serialize_msg_2(edhoc_msg_2 *msg2, msg_2_context* context, unsigned char* buffer, size_t buf_size) {
+    // Compute AAD
+    byte aad2[SHA256_DIGEST_SIZE];
+    edhoc_aad2(msg2, context->message1, aad2);
+
+    // Compute Signature
+    uint8_t sig_v[256];
+    size_t sig_v_len = sizeof(sig_v);
+    edhoc_msg2_sig_v(msg2, aad2, context->sign_key, sig_v, sizeof(sig_v), &sig_v_len);
+
+    bytes b_sig_v = {sig_v, sig_v_len};
+    printf("siv_v: ");
+    phex(sig_v, sig_v_len);
+
+    // Derive keys
+    bytes other = {aad2, SHA256_DIGEST_SIZE};
+
+    uint8_t context_info_k2[128];
+    size_t ci_k2_len;
+    cose_kdf_context("AES-CCM-64-64-128", 16, other, context_info_k2, sizeof(context_info_k2), &ci_k2_len);
+
+    uint8_t context_info_iv2[128];
+    size_t ci_iv2_len;
+    cose_kdf_context("IV-Generation", 7, other, context_info_iv2, sizeof(context_info_iv2), &ci_iv2_len);
+
+    bytes b_ci_k2 = {context_info_k2, ci_k2_len};
+    bytes b_ci_iv2 = {context_info_iv2, ci_iv2_len};
+
+    uint8_t k2[16];
+    derive_key(context->shared_secret, b_ci_k2, k2, sizeof(k2));
+
+    uint8_t iv2[7];
+    derive_key(context->shared_secret, b_ci_iv2, iv2, sizeof(iv2));
+
+    printf("AAD2: ");
+    phex(aad2, SHA256_DIGEST_SIZE);
+    printf("K2: ");
+    phex(k2, 16);
+    printf("IV2: ");
+    phex(iv2, 7);
+
+    // Encrypt
+    uint8_t enc_2[256];
+    size_t enc_2_len = sizeof(enc_2);
+    bytes b_k2 = {k2, 16};
+    bytes b_iv2 = {iv2, 7};
+    edhoc_msg2_enc_0(msg2, aad2, &b_sig_v, &b_k2, &b_iv2, enc_2, sizeof(enc_2), &enc_2_len);
+
+    // Serialize
     CborEncoder enc;
     cbor_encoder_init(&enc, buffer, buf_size, 0);
 
@@ -66,7 +114,7 @@ size_t edhoc_serialize_msg_2(edhoc_msg_2 *msg2, unsigned char* buffer, size_t bu
     cbor_encode_byte_string(&ary, msg2->peer_session_id.buf, msg2->peer_session_id.len);
     cbor_encode_byte_string(&ary, msg2->peer_nonce.buf, msg2->peer_nonce.len);
     cbor_encode_byte_string(&ary, msg2->peer_key.buf, msg2->peer_key.len);
-    cbor_encode_byte_string(&ary, msg2->_cose_enc_2.buf, msg2->_cose_enc_2.len);
+    cbor_encode_byte_string(&ary, enc_2, enc_2_len);
 
     cbor_encoder_close_container(&enc, &ary);
 
@@ -92,6 +140,12 @@ void edhoc_aad2(edhoc_msg_2 *msg2, bytes message1, byte* out_hash) {
     cbor_encoder_close_container(&enc, &ary);
     size_t data2_len = cbor_encoder_get_buffer_size(&enc, data2);
 
+    printf("data2: ");
+    phex(data2, data2_len);
+
+    printf("message1: ");
+    phex(message1.buf, message1.len);
+
     // Compute aad2
     uint8_t aad2[message1.len + data2_len];
 
@@ -104,16 +158,29 @@ void edhoc_aad2(edhoc_msg_2 *msg2, bytes message1, byte* out_hash) {
     wc_Sha256Final(&sha, out_hash);
 }
 
-void edhoc_msg2_sig_v(edhoc_msg_2 *msg2, const byte* aad2) {
+void edhoc_msg2_sig_v(edhoc_msg_2 *msg2, const byte* aad2, ecc_key* sign_key,
+                      uint8_t* out, size_t out_size, size_t* out_len) {
+
     byte* prot_header, *unprot_header;
     size_t prot_len = hexstring_to_buffer(&prot_header, "a10126", strlen("a10126"));
     size_t unprot_len = hexstring_to_buffer(&unprot_header, "a104524173796d6d65747269634543445341323536", strlen("a104524173796d6d65747269634543445341323536"));
 
-    cose_sign1 sign1;
-    sign1.payload = (bytes) {NULL, 0};
-    sign1.protected_header = (bytes) {prot_header, prot_len};
-    sign1.unprotected_header = (bytes) {unprot_header, unprot_len};
-    sign1.external_aad = (bytes) {(uint8_t *) aad2, SHA256_DIGEST_SIZE};
+    cose_sign1 sig_v;
+    sig_v.payload = (bytes) {NULL, 0};
+    sig_v.protected_header = (bytes) {prot_header, prot_len};
+    sig_v.unprotected_header = (bytes) {unprot_header, unprot_len};
+    sig_v.external_aad = (bytes) {(uint8_t *) aad2, SHA256_DIGEST_SIZE};
 
-    msg2->_sig_v = sign1;
+    cose_encode_signed(&sig_v, sign_key, out, out_size, out_len);
+}
+
+void edhoc_msg2_enc_0(edhoc_msg_2 *msg2, byte *aad2, bytes *sig_v, bytes *key, bytes *iv,
+                      uint8_t* out, size_t out_size, size_t* out_len) {
+    bytes eaad = {aad2, SHA256_DIGEST_SIZE};
+    cose_encrypt0 enc2 = {
+            .external_aad = eaad,
+            .plaintext = *sig_v
+    };
+
+    cose_encode_encrypted(&enc2, key, iv, out, out_size, out_len);
 }

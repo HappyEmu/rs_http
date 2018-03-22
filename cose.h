@@ -35,4 +35,13 @@ void cose_sign1_structure(const char* context,
                           size_t out_size,
                           size_t* out_len);
 
+void cose_encode_encrypted(cose_encrypt0 *enc0, bytes *key, bytes *iv,
+                           uint8_t *out, size_t out_size, size_t *out_len);
+void cose_enc0_structure(bytes* body_protected, bytes* external_aad,
+                         uint8_t* out, size_t out_size, size_t* out_len);
+
+void cose_kdf_context(const char* algorithm_id, int key_length, bytes other, uint8_t* out, size_t out_size, size_t *out_len);
+void derive_key(bytes input_key, bytes info, uint8_t* out, size_t out_size);
+
+
 #endif //RS_HTTP_COSE_H

@@ -19,14 +19,21 @@
 
 static const char *s_http_port = "8000";
 
-static struct rs_key AS_KEY = {
+static struct rs_key AS_ID = {
         .x = "5aeec31f9e64aad45aba2d365e71e84dee0da331badab9118a2531501fd9861d",
         .y = "27c9977ca32d544e6342676ef00fa434b3aaed99f4823750517ca3390374753",
         .d = NULL,
         .curve_id = ECC_SECP256R1
 };
 
-static ecc_key RS_KEY;
+static rs_key RS_ID_ = {
+        .x = "49a2da855bc480028e71cbdf09b51545b20f73837c6a24c90957ce1cf46458af",
+        .y = "d88ea8c7e63b0129466603bf50cd8369eeaa32c18bef9fb45ae2cdf593d826a1",
+        .d = "39a1e3cbcc09b741d29d38f67a4e18f6263647735f855f139528cb1437d6c21a",
+        .curve_id = ECC_SECP256R1
+};
+
+ecc_key RS_ID;
 
 static edhoc_server_session_state edhoc_state;
 
@@ -71,7 +78,7 @@ static void authz_info_handler(struct mg_connection* nc, int ev, void* ev_data) 
     // Verify CWT
     bytes eaad = {.buf = NULL, .len = 0};
 
-    int verified = cwt_verify(&cwt, eaad, &AS_KEY);
+    int verified = cwt_verify(&cwt, eaad, &AS_ID);
 
     if (verified != 1) {
         // Not authorized!
@@ -175,6 +182,7 @@ static void edhoc_handler_message_1(struct mg_connection* nc, int ev, void* ev_d
 
     // Generate session key
     ecc_key session_key;
+    wc_ecc_init(&session_key);
     wc_ecc_make_key_ex(&rng, 32, &session_key, ECC_SECP256R1);
 
     // Compute shared secret
@@ -195,8 +203,6 @@ static void edhoc_handler_message_1(struct mg_connection* nc, int ev, void* ev_d
     size_t n;
     cwt_encode_ecc_key(&session_key, enc_sess_key, sizeof(enc_sess_key), &n);
 
-    byte nonsense[16];
-
     edhoc_msg_2 msg2 = {
             .tag = 2,
             .session_id = msg1.session_id,
@@ -205,16 +211,14 @@ static void edhoc_handler_message_1(struct mg_connection* nc, int ev, void* ev_d
             .peer_key = {enc_sess_key, n},
     };
 
-    byte aad2[SHA256_DIGEST_SIZE];
-    edhoc_aad2(&msg2, edhoc_state.message1, aad2);
-    edhoc_msg2_sig_v(&msg2, aad2);
-
-    uint8_t sig_v_serialized[256];
-    size_t sig_v_len = sizeof(sig_v_serialized);
-    cose_encode_signed(&msg2._sig_v, &RS_KEY, sig_v_serialized, sizeof(sig_v_serialized), &sig_v_len);
+    msg_2_context ctx2 = {
+            .sign_key = &RS_ID,
+            .shared_secret = (bytes) {secret, secret_sz},
+            .message1 = edhoc_state.message1
+    };
 
     unsigned char msg_serialized[512];
-    size_t len = edhoc_serialize_msg_2(&msg2, msg_serialized, sizeof(msg_serialized));
+    size_t len = edhoc_serialize_msg_2(&msg2, &ctx2, msg_serialized, sizeof(msg_serialized));
 
     printf("Sending EDHOC MSG: ");
     phex(msg_serialized, len);
@@ -246,15 +250,8 @@ int main(void) {
     mg_register_http_endpoint(c, "/.well-known/edhoc", edhoc_handler);
     mg_register_http_endpoint(c, "/temperature", temperature_handler);
 
-    wc_ecc_init(&RS_KEY);
-    RNG rng;
-    wc_InitRng(&rng);
-    wc_ecc_make_key_ex(&rng, 32, &RS_KEY, ECC_SECP256R1);
-
-    byte x[] = {};
-    byte y[] = {};
-    word32 x_len, y_len;
-    wc_ecc_export_public_raw(&RS_KEY, x, &x_len, y, &y_len);
+    wc_ecc_import_raw_ex(&RS_ID, RS_ID_.x, RS_ID_.y, RS_ID_.d, RS_ID_.curve_id);
+    int check = wc_ecc_check_key(&RS_ID);
 
     for (;;) {
         mg_mgr_poll(&mgr, 1000);

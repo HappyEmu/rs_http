@@ -138,6 +138,8 @@ void cwt_parse_payload(rs_cwt* cwt, rs_payload* out) {
 #define CBOR_LABEL_COSE_KEY_Y (-3)
 
 void cwt_parse_cose_key(bytes* encoded, cose_key* out) {
+    out->kid = (bytes) {NULL, 0};
+
     CborParser parser;
     CborValue map;
 
@@ -167,18 +169,12 @@ void cwt_parse_cose_key(bytes* encoded, cose_key* out) {
             cbor_value_advance(&elem);
             out->crv = (uint8_t) crv;
         } else if (label == CBOR_LABEL_COSE_KEY_X) {
-            // Somehow need to skip (negative) tag
-            cbor_value_advance(&elem);
-
             uint8_t* x;
             size_t x_len;
             cbor_value_dup_byte_string(&elem, &x, &x_len, &elem);
 
             out->x = (bytes) { x, x_len };
         } else if (label == CBOR_LABEL_COSE_KEY_Y) {
-            // Somehow need to skip (negative) tag
-            cbor_value_advance(&elem);
-
             uint8_t* y;
             size_t y_len;
             cbor_value_dup_byte_string(&elem, &y, &y_len, &elem);
@@ -197,9 +193,6 @@ void cwt_encode_cose_key(cose_key* key, uint8_t* buffer, size_t buf_size, size_t
     CborEncoder map;
     cbor_encoder_create_map(&enc, &map, 5);
     
-    cbor_encode_int(&map, CBOR_LABEL_COSE_KEY_KID);
-    cbor_encode_byte_string(&map, key->kid.buf, key->kid.len);
-    
     cbor_encode_int(&map, CBOR_LABEL_COSE_KEY_KTY);
     cbor_encode_int(&map, key->kty);
     
@@ -211,6 +204,9 @@ void cwt_encode_cose_key(cose_key* key, uint8_t* buffer, size_t buf_size, size_t
 
     cbor_encode_int(&map, CBOR_LABEL_COSE_KEY_Y);
     cbor_encode_byte_string(&map, key->y.buf, key->y.len);
+
+    cbor_encode_int(&map, CBOR_LABEL_COSE_KEY_KID);
+    cbor_encode_byte_string(&map, key->kid.buf, key->kid.len);
 
     cbor_encoder_close_container(&enc, &map);
 

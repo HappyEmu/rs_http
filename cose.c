@@ -3,7 +3,10 @@
 //
 
 #include "cose.h"
+#include "utils.h"
+#include "symmetric.h"
 #include "tinycbor.h"
+#include <wolfssl/wolfcrypt/hmac.h>
 
 void cose_encode_signed(cose_sign1* sign1, ecc_key* signing_key,
                         uint8_t* out, size_t out_size, size_t* out_len) {
@@ -12,6 +15,9 @@ void cose_encode_signed(cose_sign1* sign1, ecc_key* signing_key,
 
     cose_sign1_structure("Signature1", &sign1->protected_header, &sign1->external_aad, &sign1->payload,
                          sign_structure, sizeof(sign_structure), &sign_struct_len);
+
+    printf("to_verify: ");
+    phex(sign_structure, sign_struct_len);
 
     // Hash sign structure
     Sha256 sha;
@@ -31,6 +37,7 @@ void cose_encode_signed(cose_sign1* sign1, ecc_key* signing_key,
     // Encode sign1 structure
     CborEncoder enc;
     cbor_encoder_init(&enc, out, out_size, 0);
+    cbor_encode_tag(&enc, 18);
 
     CborEncoder ary;
     cbor_encoder_create_array(&enc, &ary, 4);
@@ -65,4 +72,96 @@ void cose_sign1_structure(const char* context,
 
     cbor_encoder_close_container(&enc, &ary);
     *out_len = cbor_encoder_get_buffer_size(&enc, out);
+}
+
+void cose_encode_encrypted(cose_encrypt0 *enc0, bytes *key, bytes *iv, uint8_t *out, size_t out_size, size_t *out_len) {
+    byte* prot_header;
+    size_t prot_len = hexstring_to_buffer(&prot_header, "a1010c", strlen("a1010c"));
+    bytes b_prot_header = {prot_header, prot_len};
+
+    // Compute aad
+    uint8_t aad[128];
+    size_t aad_len;
+    cose_enc0_structure(&b_prot_header, &enc0->external_aad, aad, sizeof(aad), &aad_len);
+
+    // Encrypt
+    uint8_t ciphertext[enc0->plaintext.len];
+    uint8_t tag[TAG_SIZE];
+    rs_encrypt(ciphertext, enc0->plaintext.buf, (word32) enc0->plaintext.len, key->buf, iv->buf, tag, aad,
+               (word32) aad_len);
+
+    uint8_t tagged_ciphertext[sizeof(ciphertext) + sizeof(tag)];
+    memcpy(tagged_ciphertext, ciphertext, sizeof(ciphertext));
+    memcpy(tagged_ciphertext + sizeof(ciphertext), tag, sizeof(tag));
+
+    // Encode
+    CborEncoder enc;
+    cbor_encoder_init(&enc, out, out_size, 0);
+    cbor_encode_tag(&enc, 16);
+
+    CborEncoder ary;
+    cbor_encoder_create_array(&enc, &ary, 3);
+
+    cbor_encode_byte_string(&ary, b_prot_header.buf, b_prot_header.len);
+    cbor_encode_byte_string(&ary, NULL, 0);
+    cbor_encode_byte_string(&ary, tagged_ciphertext, sizeof(tagged_ciphertext));
+
+    cbor_encoder_close_container(&enc, &ary);
+
+    *out_len = cbor_encoder_get_buffer_size(&enc, out);
+}
+
+void cose_enc0_structure(bytes* body_protected, bytes* external_aad,
+                         uint8_t* out, size_t out_size, size_t* out_len) {
+
+    CborEncoder enc;
+    cbor_encoder_init(&enc, out, out_size, 0);
+
+    CborEncoder ary;
+    cbor_encoder_create_array(&enc, &ary, 3);
+
+    cbor_encode_text_stringz(&ary, "Encrypt0");
+    cbor_encode_byte_string(&ary, body_protected->buf, body_protected->len);
+    cbor_encode_byte_string(&ary, external_aad->buf, external_aad->len);
+
+    cbor_encoder_close_container(&enc, &ary);
+    *out_len = cbor_encoder_get_buffer_size(&enc, out);
+}
+
+void cose_kdf_context(const char* algorithm_id, int key_length, bytes other, uint8_t* out, size_t out_size, size_t *out_len) {
+    CborEncoder enc;
+    cbor_encoder_init(&enc, out, out_size, 0);
+
+    CborEncoder ary;
+    cbor_encoder_create_array(&enc, &ary, 4);
+    cbor_encode_text_stringz(&ary, algorithm_id);
+
+    CborEncoder partyUInfo;
+    cbor_encoder_create_array(&ary, &partyUInfo, 3);
+    cbor_encode_null(&partyUInfo);
+    cbor_encode_null(&partyUInfo);
+    cbor_encode_null(&partyUInfo);
+    cbor_encoder_close_container(&ary, &partyUInfo);
+
+    CborEncoder partyVInfo;
+    cbor_encoder_create_array(&ary, &partyVInfo, 3);
+    cbor_encode_null(&partyVInfo);
+    cbor_encode_null(&partyVInfo);
+    cbor_encode_null(&partyVInfo);
+    cbor_encoder_close_container(&ary, &partyVInfo);
+
+    CborEncoder suppPubInfo;
+    cbor_encoder_create_array(&ary, &suppPubInfo, 3);
+    cbor_encode_int(&suppPubInfo, key_length);
+    cbor_encode_byte_string(&suppPubInfo, NULL, 0);
+    cbor_encode_byte_string(&suppPubInfo, other.buf, other.len);
+    cbor_encoder_close_container(&ary, &suppPubInfo);
+
+    cbor_encoder_close_container(&enc, &ary);
+
+    *out_len = cbor_encoder_get_buffer_size(&enc, out);
+}
+
+void derive_key(bytes input_key, bytes info, uint8_t* out, size_t out_size) {
+    wc_HKDF(SHA256, input_key.buf, (word32) input_key.len, NULL, 0, info.buf, (word32) info.len, out, (word32) out_size);
 }
