@@ -17,7 +17,7 @@ void edhoc_deserialize_msg1(edhoc_msg_1 *msg1, uint8_t* buffer, size_t len) {
     CborValue elem;
     cbor_value_enter_container(&value, &elem);
 
-    cbor_value_get_uint64(&elem, (CborTag *) &msg1->tag);
+    cbor_value_get_uint64(&elem, (uint64_t *) &msg1->tag);
     cbor_value_advance(&elem);
 
     cbor_value_dup_byte_string(&elem, &msg1->session_id.buf, &msg1->session_id.len, &elem);
@@ -29,27 +29,23 @@ void edhoc_deserialize_msg3(edhoc_msg_3 *msg3, uint8_t* buffer, size_t len) {
     CborParser parser;
     CborValue value;
 
-    cbor_parser_init(buffer, len, 0, &parser, &value);
+    uint8_t* copy = buffer;
+    cbor_parser_init(copy, len, 0, &parser, &value);
 
     CborValue element;
     cbor_value_enter_container(&value, &element);
 
-    CborTag tag;
-    cbor_value_get_tag(&element, &tag);
-
+    cbor_value_get_uint64(&element, (uint64_t *) &msg3->tag);
     cbor_value_advance(&element);
 
     uint8_t* peer_sess_id;
     size_t peer_sess_id_length;
     cbor_value_dup_byte_string(&element, &peer_sess_id, &peer_sess_id_length, &element);
 
-    cbor_value_advance(&element);
-
     uint8_t* cose_enc_3;
     size_t cose_enc_3_length;
     cbor_value_dup_byte_string(&element, &cose_enc_3, &cose_enc_3_length, &element);
 
-    msg3->tag = (uint8_t) tag;
     msg3->peer_session_id = (struct bytes) { peer_sess_id, peer_sess_id_length };
     msg3->cose_enc_3      = (struct bytes) { cose_enc_3,   cose_enc_3_length };
 }
@@ -184,3 +180,48 @@ void edhoc_msg2_enc_0(edhoc_msg_2 *msg2, byte *aad2, bytes *sig_v, bytes *key, b
 
     cose_encode_encrypted(&enc2, key, iv, out, out_size, out_len);
 }
+
+void edhoc_aad3(edhoc_msg_3* msg3, bytes* message1, bytes* message2,
+                uint8_t* out_hash) {
+
+    // Combine msg1+msg2;
+    uint8_t combined[message1->len + message2->len];
+    memcpy(combined, message1->buf, message1->len);
+    memcpy(combined+message1->len, message2->buf, message2->len);
+
+    Sha256 sha;
+    wc_InitSha256(&sha);
+    wc_Sha256Update(&sha, combined, sizeof(combined));
+
+    uint8_t digest[SHA256_DIGEST_SIZE];
+    wc_Sha256Final(&sha, digest);
+
+
+    // Compute data3
+    uint8_t data3[64];
+
+    CborEncoder enc;
+    cbor_encoder_init(&enc, data3, sizeof(data3), 0);
+
+    CborEncoder ary;
+    cbor_encoder_create_array(&enc, &ary, 2);
+
+    cbor_encode_int(&ary, msg3->tag);
+    cbor_encode_byte_string(&ary, msg3->peer_session_id.buf, msg3->peer_session_id.len);
+
+    cbor_encoder_close_container(&enc, &ary);
+    size_t data3_len = cbor_encoder_get_buffer_size(&enc, data3);
+
+
+    // Comine with data3
+    uint8_t final[SHA256_DIGEST_SIZE + data3_len];
+    memcpy(final, digest, SHA256_DIGEST_SIZE);
+    memcpy(final+SHA256_DIGEST_SIZE, data3, data3_len);
+
+    Sha256 sha2;
+    wc_InitSha256(&sha2);
+    wc_Sha256Update(&sha2, final, sizeof(final));
+
+    wc_Sha256Final(&sha2, out_hash);
+}
+

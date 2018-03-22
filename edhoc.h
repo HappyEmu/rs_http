@@ -45,6 +45,7 @@ typedef struct edhoc_msg_3 {
 typedef struct edhoc_server_session_state {
     bytes session_id;
     ecc_key pop_key;
+    bytes shared_secret;
     bytes message1;
     bytes message2;
     bytes message3;
@@ -61,5 +62,8 @@ void edhoc_msg2_sig_v(edhoc_msg_2 *msg2, const byte* aad2, ecc_key* sign_key,
 
 void edhoc_msg2_enc_0(edhoc_msg_2 *msg2, byte *aad2, bytes *sig_v, bytes *key, bytes *iv,
                       uint8_t* out, size_t out_size, size_t* out_len);
+
+void edhoc_aad3(edhoc_msg_3* msg3, bytes* message1, bytes* message2,
+                uint8_t* out_hash);
 
 #endif //RS_HTTP_EDHOC_H
