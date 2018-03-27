@@ -178,7 +178,7 @@ void edhoc_msg2_enc_0(edhoc_msg_2 *msg2, byte *aad2, bytes *sig_v, bytes *key, b
             .plaintext = *sig_v
     };
 
-    cose_encode_encrypted(&enc2, key, iv, out, out_size, out_len);
+    cose_encode_encrypted(&enc2, key->buf, iv->buf, out, out_size, out_len);
 }
 
 void edhoc_aad3(edhoc_msg_3* msg3, bytes* message1, bytes* message2,
@@ -217,6 +217,31 @@ void edhoc_aad3(edhoc_msg_3* msg3, bytes* message1, bytes* message2,
     uint8_t final[SHA256_DIGEST_SIZE + data3_len];
     memcpy(final, digest, SHA256_DIGEST_SIZE);
     memcpy(final+SHA256_DIGEST_SIZE, data3, data3_len);
+
+    Sha256 sha2;
+    wc_InitSha256(&sha2);
+    wc_Sha256Update(&sha2, final, sizeof(final));
+
+    wc_Sha256Final(&sha2, out_hash);
+}
+
+void oscore_exchange_hash(bytes *msg1, bytes *msg2, bytes *msg3, uint8_t *out_hash) {
+    // Combine msg1+msg2;
+    uint8_t combined[msg1->len + msg2->len];
+    memcpy(combined, msg1->buf, msg1->len);
+    memcpy(combined+msg1->len, msg2->buf, msg2->len);
+
+    Sha256 sha;
+    wc_InitSha256(&sha);
+    wc_Sha256Update(&sha, combined, sizeof(combined));
+
+    uint8_t digest[SHA256_DIGEST_SIZE];
+    wc_Sha256Final(&sha, digest);
+
+    // Comine with msg3
+    uint8_t final[SHA256_DIGEST_SIZE + msg3->len];
+    memcpy(final, digest, SHA256_DIGEST_SIZE);
+    memcpy(final+SHA256_DIGEST_SIZE, msg3->buf, msg3->len);
 
     Sha256 sha2;
     wc_InitSha256(&sha2);

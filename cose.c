@@ -74,7 +74,7 @@ void cose_sign1_structure(const char* context,
     *out_len = cbor_encoder_get_buffer_size(&enc, out);
 }
 
-void cose_encode_encrypted(cose_encrypt0 *enc0, bytes *key, bytes *iv, uint8_t *out, size_t out_size, size_t *out_len) {
+void cose_encode_encrypted(cose_encrypt0 *enc0, byte *key, byte *iv, uint8_t *out, size_t out_size, size_t *out_len) {
     byte* prot_header;
     size_t prot_len = hexstring_to_buffer(&prot_header, "a1010c", strlen("a1010c"));
     bytes b_prot_header = {prot_header, prot_len};
@@ -87,7 +87,7 @@ void cose_encode_encrypted(cose_encrypt0 *enc0, bytes *key, bytes *iv, uint8_t *
     // Encrypt
     uint8_t ciphertext[enc0->plaintext.len];
     uint8_t tag[TAG_SIZE];
-    rs_encrypt(ciphertext, enc0->plaintext.buf, (word32) enc0->plaintext.len, key->buf, iv->buf, tag, aad,
+    rs_encrypt(ciphertext, enc0->plaintext.buf, (word32) enc0->plaintext.len, key, iv, tag, aad,
                (word32) aad_len);
 
     uint8_t tagged_ciphertext[sizeof(ciphertext) + sizeof(tag)];

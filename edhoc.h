@@ -66,4 +66,6 @@ void edhoc_msg2_enc_0(edhoc_msg_2 *msg2, byte *aad2, bytes *sig_v, bytes *key, b
 void edhoc_aad3(edhoc_msg_3* msg3, bytes* message1, bytes* message2,
                 uint8_t* out_hash);
 
+void oscore_exchange_hash(bytes *msg1, bytes *msg2, bytes *msg3, uint8_t *out_hash);
+
 #endif //RS_HTTP_EDHOC_H
